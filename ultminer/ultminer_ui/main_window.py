@@ -382,6 +382,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self.fig.set_facecolor("white")
         self.ax = self.fig.add_subplot(111)
         self.ax.set_xlim((0, self.max_x))
+        self.ax.set_xticks([])
 
         # Initialize matplotlib figure canvas
         super().__init__(self.fig)
