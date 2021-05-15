@@ -9,7 +9,7 @@
 ################################################################################
 import sys
 from collections import deque
-from time import sleep, time_ns
+from time import sleep, time_ns, strftime, localtime
 
 from PySide2.QtCore import *
 from PySide2.QtGui import *
@@ -365,8 +365,8 @@ class MiningCtrlThread(QThread):
 
 class GraphCanvas(FigureCanvasQTAgg):
     def __init__(self, parent):
-        self.max_x = 50
-        self.color_lst = [
+        self.max_data_len = 30
+        self.color_list = [
             'red',
             'orange',
             'yellow',
@@ -377,12 +377,11 @@ class GraphCanvas(FigureCanvasQTAgg):
             'black'
         ]
         # Initialize matplotlib figure
-        self.init_size = (parent.width()*3, parent.height())
+        self.init_size = (parent.width(), parent.height())
         self.fig = Figure(self.init_size)
         self.fig.set_facecolor("white")
         self.ax = self.fig.add_subplot(111)
-        self.ax.set_xlim((0, self.max_x))
-        self.ax.set_xticks([])
+        self.axis_init()
 
         # Initialize matplotlib figure canvas
         super().__init__(self.fig)
@@ -394,26 +393,36 @@ class GraphCanvas(FigureCanvasQTAgg):
 
         self.legacy_data = {}
 
+        self.legacy_xticklabels = {}
+
     def init_with_data_properties(self, data_properties):
         self.data_properties = data_properties
         for key, _ in data_properties.items():
-            # make_interp_spline can only draw more than 4 points
-            # so when the first data come, canvas can draw immediately
-
-            self.legacy_data.update({key: deque([0 for _ in range(3)], maxlen=self.max_x)})
+            self.legacy_data[key] = deque([0.0], maxlen=self.max_data_len)
+            self.legacy_xticklabels[key] = deque([strftime("%H:%M:%S", localtime())], maxlen=self.max_data_len)
 
     def append(self, new_data):
         for key, val in new_data.items():
             if key in self.legacy_data:
                 self.legacy_data[key].append(val)
+                self.legacy_xticklabels[key].append(strftime("%H:%M:%S", localtime()))
             else:
-                self.legacy_data[key] = deque([0 for _ in range(3)], maxlen=self.max_x)
+                self.legacy_data[key] = deque([0.0], maxlen=self.max_data_len)
+                self.legacy_xticklabels[key] = deque(
+                    [strftime("%Y.%m.%d %H:%M:%S", localtime())],
+                    maxlen=self.max_data_len
+                )
 
     def draw_data(self, combo_id, key):
         self.ax.cla()
 
-        self.ax.set_xlim((0, self.max_x))
-        self.ax.set_xticks([])
+        self.axis_init()
+
+        # Fill up legacy_xticklabels
+        filled_xticklabels = self.legacy_xticklabels[key].copy()
+        if len(self.legacy_xticklabels[key]) < self.max_data_len:
+            filled_xticklabels.extend(["" for _ in range(self.max_data_len - len(self.legacy_xticklabels[key]))])
+        self.ax.set_xticklabels(filled_xticklabels, rotation=300)
 
         if self.data_properties[key].get("range") is not None:
             self.ax.set_ylim(self.data_properties[key]["range"])
@@ -427,16 +436,34 @@ class GraphCanvas(FigureCanvasQTAgg):
             mticker.FormatStrFormatter('%.1f {unit}'.format(unit=unit))
         )
 
-        val = self.legacy_data[key]
+        # make_interp_spline can only draw more than 4 points.
+        # Add (-3, 0), (-2, 0), (-1, 0) into graph to make sure there are always at least 4 points in graph
+        data_selected = self.legacy_data[key].copy()
+        data_extended = [0.0, 0.0, 0.0]
+        data_extended.extend(data_selected)
 
-        # make_interp_spline can only draw more than 4 points
-        if len(val) >= 4:
-            x = np.array(range(len(val)))
-            y = np.array(val)
-            smoothed_x = np.linspace(x.min(), x.max(), 1000)
-            smoothed_y = make_interp_spline(x, y)(smoothed_x)
-            self.ax.plot(smoothed_x, smoothed_y, color=self.color_lst[int(combo_id % len(self.color_lst))])
+        x = np.array(range(-3, len(data_selected)))
+        y = np.array(data_extended)
+
+        # for cur_x, cur_y in zip(x, y):
+        #     if cur_x >= 0 and cur_y >= 0:
+        #         self.ax.text(cur_x, cur_y, cur_y)
+
+        self.ax.scatter(x, y, color=self.color_list[int(combo_id % len(self.color_list))])
+        self.ax.plot(x, y, color=self.color_list[int(combo_id % len(self.color_list))])
+
+        # B-Spline is not very good in this case
+        # smoothed_x = np.linspace(x.min(), x.max(), 1000)
+        # smoothed_y = make_interp_spline(x, y)(smoothed_x)
+        # self.ax.plot(smoothed_x, smoothed_y, color=self.color_list[int(combo_id % len(self.color_list))])
 
         self.draw()
 
+    def axis_init(self):
+        self.ax.tick_params(axis="x", bottom=True, top=False, labelbottom=True, labeltop=False)
+        self.ax.set_xlim((0, self.max_data_len-1))
+        self.ax.set_xticks([idx for idx in range(self.max_data_len)])
+        self.ax.set_xticklabels([])
 
+        self.ax.tick_params(axis="y", left=True, right=False, labelleft=True, labelright=False)
+        self.ax.set_yticklabels([])
