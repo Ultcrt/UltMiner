@@ -9,6 +9,7 @@
 ################################################################################
 import sys
 from collections import deque
+from time import sleep, time_ns
 
 from PySide2.QtCore import *
 from PySide2.QtGui import *
@@ -180,7 +181,7 @@ class Ui_MainWindow(object):
 from scipy.interpolate import make_interp_spline
 import json
 import os
-from subprocess import Popen, PIPE, call, STARTUPINFO, STARTF_USESHOWWINDOW
+from subprocess import Popen, PIPE, call, STARTUPINFO, STARTF_USESHOWWINDOW, STDOUT
 from ultminer.ultminer_ctrl.nb_kernel import NBKernel
 from threading import Thread
 import matplotlib.ticker as mticker
@@ -197,14 +198,6 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         self.setWindowIcon(QIcon(icon_path))
 
         self.kernel = NBKernel()
-
-        # QProcess cannot kill mining process for unknown reason. It also cannot read nbminer output for some reasons.
-        # self.mining_process = QProcess(self)
-        # self.mining_process.readyReadStandardOutput.connect(self.process_message_slot)
-        # self.mining_process.readyReadStandardError.connect(self.process_error_slot)
-
-        self.start_button.clicked.connect(self.start_slot)
-        self.graph_combo.currentIndexChanged.connect(self.graph_combo_change_slot)
 
         self.log_thread = None
 
@@ -228,6 +221,7 @@ class MainWindow(Ui_MainWindow, QMainWindow):
             )
         )
         self.tray.setContextMenu(self.tray_menu)
+        self.tray.activated.connect(self.tray_activated_slot)
         self.tray.show()
 
         self.cfg_path = "cfg" + os.sep + "config.json"
@@ -245,13 +239,8 @@ class MainWindow(Ui_MainWindow, QMainWindow):
                 if "miner_name" in config.keys():
                     self.miner_edit.setText(config["miner_name"])
 
-    # def process_message_slot(self):
-    #     self.log_browser.append('<span style=\" color: white;\">%s</span>' %
-    #                             self.mining_process.readAllStandardOutput().data().decode('GBK'))
-    #
-    # def process_error_slot(self):
-    #     self.log_browser.append('<span style=\" color: red;\">%s</span>' %
-    #                             self.mining_process.readAllStandardOutput().data().decode('GBK'))
+        self.start_button.clicked.connect(self.start_slot)
+        self.graph_combo.currentIndexChanged.connect(self.graph_combo_change_slot)
 
     def start_slot(self):
         pool_url = self.pool_edit.text()
@@ -278,26 +267,44 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         self.graph_combo.addItems(self.kernel.get_drawable_properties().keys())
         self.graph_combo.setEnabled(True)
         # Make graph show at start
-        self.graph_canvas.draw_data(self.graph_combo.currentText())
+        self.graph_combo_change_slot()
 
         cmd = self.kernel.get_command(pool_url, wallet_address, miner_name)
 
         # nbminer outputs are always stderr
-        self.log_thread = MiningCtrlThread(cmd, self.log_browser, self.graph_canvas, self.graph_combo, self.kernel)
+        self.log_thread = MiningCtrlThread(cmd, self.kernel)
+        self.log_thread.log_update_signal.connect(self.log_update_slot)
+        self.log_thread.graph_update_signal.connect(self.graph_update_slot)
 
         self.log_thread.start()
 
         self.start_button.setEnabled(False)
 
     def graph_combo_change_slot(self):
-        self.graph_canvas.draw_data(self.graph_combo.currentText())
+        self.graph_canvas.draw_data(self.graph_combo.currentIndex(), self.graph_combo.currentText())
+
+    def graph_update_slot(self, new_data):
+        self.graph_canvas.append(new_data)
+        self.graph_canvas.draw_data(self.graph_combo.currentIndex(), self.graph_combo.currentText())
+
+    def log_update_slot(self, new_line):
+        if "ERROR" in new_line:
+            style_line = '<span style=\" color: red;\">%s</span>' % new_line
+        else:
+            style_line = '<span style=\" color: white;\">%s</span>' % new_line
+        self.log_browser.append(style_line)
+        self.log_browser.moveCursor(QTextCursor.End)
+
+    def tray_activated_slot(self, event):
+        if event == QSystemTrayIcon.DoubleClick:
+            self.showNormal()
 
     def closeEvent(self, event: QCloseEvent):
         self.tray.hide()
         if self.log_thread is not None:
             self.log_thread.stop()
             # Wait for mining process to be killed
-            self.log_thread.join()
+            self.log_thread.wait()
         event.accept()
 
     def changeEvent(self, event):
@@ -314,55 +321,61 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         event.accept()
 
 
+class MiningCtrlThread(QThread):
+    log_update_signal = Signal(str)
+    graph_update_signal = Signal(dict)
 
-
-class MiningCtrlThread(Thread):
-    def __init__(self, cmd, log_browser, graph_canvas, graph_combo, kernel, _subprocess=None):
+    def __init__(self, cmd, kernel):
         super().__init__()
 
-        start_info = STARTUPINFO()
-        start_info.dwFlags |= STARTF_USESHOWWINDOW
-        self.mining_process = Popen(
-            cmd, universal_newlines=True, stdout=PIPE, stderr=PIPE, stdin=PIPE, startupinfo=start_info
-        )
-        self.log_browser = log_browser
-        self.graph_canvas = graph_canvas
-        self.graph_combo = graph_combo
+        self.os_type = system()
+
+        if self.os_type == "Windows":
+            start_info = STARTUPINFO()
+            start_info.dwFlags |= STARTF_USESHOWWINDOW
+            self.mining_process = Popen(
+                cmd, universal_newlines=True, stdout=PIPE, stderr=STDOUT, stdin=PIPE, startupinfo=start_info
+            )
+        else:
+            self.mining_process = Popen(
+                cmd, universal_newlines=True, stdout=PIPE, stderr=STDOUT, stdin=PIPE
+            )
         self.kernel = kernel
 
         self.keep_running = True
 
     def stop(self):
         self.keep_running = False
-        os_type = system()
         # Different approach to kill all mining process based on OS
-        if os_type == "Linux":
+        if self.os_type == "Linux":
             os.killpg(self.mining_process.pid, signal.SIGKILL)
-        elif os_type == "Windows":
-            call(['taskkill', '/F', '/T', '/PID', str(self.mining_process.pid)], stdout=PIPE, stderr=PIPE, stdin=PIPE)
+        elif self.os_type == "Windows":
+            call(['taskkill', '/F', '/T', '/PID', str(self.mining_process.pid)], stdout=PIPE, stderr=STDOUT, stdin=PIPE)
 
     def run(self):
         while self.keep_running:
             # Log update
-            new_line = self.mining_process.stderr.readline()
-            if "ERROR" in new_line:
-                style_line = '<span style=\" color: red;\">%s</span>' % new_line
-            else:
-                style_line = '<span style=\" color: white;\">%s</span>' % new_line
-            self.log_browser.append(style_line)
-            self.log_browser.moveCursor(QTextCursor.End)
-
+            new_line = self.mining_process.stdout.readline()
+            self.log_update_signal.emit(new_line)
             # Graph update
             new_data = self.kernel.get_new_drawable_data(new_line)
             if new_data is not None:
-                self.graph_canvas.append(new_data)
-                self.graph_canvas.draw_data(self.graph_combo.currentText())
-
+                self.graph_update_signal.emit(new_data)
 
 
 class GraphCanvas(FigureCanvasQTAgg):
     def __init__(self, parent):
-        self.max_x = 30
+        self.max_x = 50
+        self.color_lst = [
+            'red',
+            'orange',
+            'yellow',
+            'green',
+            'cyan',
+            'blue',
+            'purple',
+            'black'
+        ]
         # Initialize matplotlib figure
         self.init_size = (parent.width()*3, parent.height())
         self.fig = Figure(self.init_size)
@@ -395,7 +408,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             else:
                 self.legacy_data[key] = deque([0 for _ in range(3)], maxlen=self.max_x)
 
-    def draw_data(self, key):
+    def draw_data(self, combo_id, key):
         self.ax.cla()
 
         self.ax.set_xlim((0, self.max_x))
@@ -420,7 +433,7 @@ class GraphCanvas(FigureCanvasQTAgg):
             y = np.array(val)
             smoothed_x = np.linspace(x.min(), x.max(), 1000)
             smoothed_y = make_interp_spline(x, y)(smoothed_x)
-            self.ax.plot(smoothed_x, smoothed_y)
+            self.ax.plot(smoothed_x, smoothed_y, color=self.color_lst[int(combo_id % len(self.color_lst))])
 
         self.draw()
 
