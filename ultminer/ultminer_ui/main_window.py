@@ -413,6 +413,7 @@ class GraphCanvas(FigureCanvasQTAgg):
         self.ax.cla()
 
         self.ax.set_xlim((0, self.max_x))
+        self.ax.set_xticks([])
 
         if self.data_properties[key].get("range") is not None:
             self.ax.set_ylim(self.data_properties[key]["range"])
