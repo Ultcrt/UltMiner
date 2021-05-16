@@ -135,7 +135,6 @@ out
 gen
 
 # Specific
-assets
 cfg
 kernels
 logs

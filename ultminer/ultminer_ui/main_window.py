@@ -181,7 +181,7 @@ class Ui_MainWindow(object):
 from scipy.interpolate import make_interp_spline
 import json
 import os
-from subprocess import Popen, PIPE, call, STARTUPINFO, STARTF_USESHOWWINDOW, STDOUT
+import subprocess
 from ultminer.ultminer_ctrl.nb_kernel import NBKernel
 from threading import Thread
 import matplotlib.ticker as mticker
@@ -277,7 +277,7 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         cmd = self.kernel.get_command(pool_url, wallet_address, miner_name)
 
         # nbminer outputs are always stderr
-        self.log_thread = MiningCtrlThread(cmd, self.kernel)
+        self.log_thread = MiningCtrlThread(self, cmd, self.kernel)
         self.log_thread.log_update_signal.connect(self.log_update_slot)
         self.log_thread.graph_update_signal.connect(self.graph_update_slot)
 
@@ -338,20 +338,23 @@ class MiningCtrlThread(QThread):
     log_update_signal = Signal(str)
     graph_update_signal = Signal(dict)
 
-    def __init__(self, cmd, kernel):
-        super().__init__()
+    def __init__(self, parent, cmd, kernel):
+        super().__init__(parent)
 
         self.os_type = system()
 
         if self.os_type == "Windows":
-            start_info = STARTUPINFO()
-            start_info.dwFlags |= STARTF_USESHOWWINDOW
-            self.mining_process = Popen(
-                cmd, universal_newlines=True, stdout=PIPE, stderr=STDOUT, stdin=PIPE, startupinfo=start_info
+            start_info = subprocess.STARTUPINFO()
+            start_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            self.mining_process = subprocess.Popen(
+                cmd, universal_newlines=True, startupinfo=start_info,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE
             )
-        else:
-            self.mining_process = Popen(
-                cmd, universal_newlines=True, stdout=PIPE, stderr=STDOUT, stdin=PIPE
+        elif self.os_type == "Linux":
+            self.mining_process = subprocess.Popen(
+                cmd, universal_newlines=True, shell=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE,
+                preexec_fn=os.setsid
             )
         self.kernel = kernel
 
@@ -359,11 +362,6 @@ class MiningCtrlThread(QThread):
 
     def stop(self):
         self.keep_running = False
-        # Different approach to kill all mining process based on OS
-        if self.os_type == "Linux":
-            os.killpg(self.mining_process.pid, signal.SIGKILL)
-        elif self.os_type == "Windows":
-            call(['taskkill', '/F', '/T', '/PID', str(self.mining_process.pid)], stdout=PIPE, stderr=STDOUT, stdin=PIPE)
 
     def run(self):
         while self.keep_running:
@@ -374,6 +372,15 @@ class MiningCtrlThread(QThread):
             new_data = self.kernel.get_new_drawable_data(new_line)
             if new_data is not None:
                 self.graph_update_signal.emit(new_data)
+
+        # Different approach to kill all mining process based on OS
+        if self.os_type == "Linux":
+            os.killpg(os.getpgid(self.mining_process.pid), signal.SIGKILL)
+        elif self.os_type == "Windows":
+            subprocess.call(
+                ['taskkill', '/F', '/T', '/PID', str(self.mining_process.pid)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE
+            )
 
 
 class GraphCanvas(FigureCanvasQTAgg):

@@ -5,7 +5,7 @@ from time import localtime, strftime
 import requests
 from platform import system
 from zipfile import ZipFile
-from tarfile import TarFile
+import tarfile
 from ultminer.ultminer_ctrl.kernel import Kernel
 from re import findall
 
@@ -110,7 +110,7 @@ class NBKernel(Kernel):
         # TAR and ZIP file names always use "/"
         if self.suffix == ".tgz":
             sub_dir = "NBMiner_Linux"
-            tar_obj = TarFile(save_path)
+            tar_obj = tarfile.open(save_path)
             tar_obj.extract(sub_dir + "/" + self.exec, self.kernel_dir)
             tar_obj.close()
         elif self.suffix == ".zip":
@@ -175,23 +175,22 @@ class NBKernel(Kernel):
             return None
         elif self.sample_next_line:
             self.sample_next_line = False
-            raw_list = findall(r"[0-9.]+", new_line)
-            data_list = map(float, raw_list[3:])
-            data_dict = dict(zip(self.data_name, data_list))
-            total_shares = data_dict["Accept"] + data_dict["Reject"] + data_dict["Inv"]
+            raw_list = findall(r"\|[ ]*([a-zA-Z0-9.]+)", new_line)
+            data_dict = dict(zip(self.data_name, raw_list))
+            total_shares = float(data_dict["Accept"]) + float(data_dict["Reject"]) + float(data_dict["Inv"])
             if total_shares == 0:
                 total_shares = 1
             drawable_dict = {
-                "哈希率": data_dict["Hashrate"],
-                "接受率": data_dict["Accept"] * 100 / total_shares,
-                "拒绝率": data_dict["Reject"] * 100 / total_shares,
-                "无效率": data_dict["Inv"] * 100 / total_shares,
-                "功耗": data_dict["Powr"],
-                "温度": data_dict["Temp"],
-                "风扇利用率": data_dict["Fan"],
-                "核心频率": data_dict["CClk"],
-                "显存频率": data_dict["GMClk"],
-                "显存利用率": data_dict["MUtl"],
-                "效率": data_dict["Eff/Watt"],
+                "哈希率": float(data_dict["Hashrate"]),
+                "接受率": float(data_dict["Accept"]) * 100 / total_shares,
+                "拒绝率": float(data_dict["Reject"]) * 100 / total_shares,
+                "无效率": float(data_dict["Inv"]) * 100 / total_shares,
+                "功耗": float(data_dict["Powr"]),
+                "温度": float(data_dict["Temp"]),
+                "风扇利用率": float(data_dict["Fan"]),
+                "核心频率": float(data_dict["CClk"]),
+                "显存频率": float(data_dict["GMClk"]),
+                "显存利用率": float(data_dict["MUtl"]),
+                "效率": float(data_dict["Eff/Watt"]),
             }
             return drawable_dict
