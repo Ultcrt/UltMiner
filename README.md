@@ -39,17 +39,6 @@ python run.py
 
 You can:
 
-1. Simply download executable latest release
-2. Install qt5-default:
-
-```shell
-sudo apt-get install qt5-default
-```
-
-3. Run UltMiner
-
-or:
-
 1. Clone or download sources code
 2. Install qt5-default:
 
