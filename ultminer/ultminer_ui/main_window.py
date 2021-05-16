@@ -197,6 +197,11 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         self.setWindowTitle("UltMiner")
         self.setWindowIcon(QIcon(icon_path))
 
+        # log_browser related variables
+        self.init_browser_style = self.log_browser.toHtml()
+        self.appended_lines_count = 0
+        self.max_buffered_lines = 1000
+
         self.kernel = NBKernel()
 
         self.log_thread = None
@@ -288,12 +293,20 @@ class MainWindow(Ui_MainWindow, QMainWindow):
         self.graph_canvas.draw_data(self.graph_combo.currentIndex(), self.graph_combo.currentText())
 
     def log_update_slot(self, new_line):
+        if self.appended_lines_count >= self.max_buffered_lines:
+            self.log_browser.clear()
+            self.log_browser.setHtml(self.init_browser_style)
+            self.appended_lines_count = 0
+
         if "ERROR" in new_line:
             style_line = '<span style=\" color: red;\">%s</span>' % new_line
         else:
             style_line = '<span style=\" color: white;\">%s</span>' % new_line
+
         self.log_browser.append(style_line)
         self.log_browser.moveCursor(QTextCursor.End)
+
+        self.appended_lines_count += 1
 
     def tray_activated_slot(self, event):
         if event == QSystemTrayIcon.DoubleClick:
